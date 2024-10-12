@@ -4,5 +4,6 @@ void init_app();
 void adcConvDone();
 void heartbeat();
 void handleCommand();
-float readChannel(int channel);
+float readChannel(ADS1115_MUX channel);
+void convReadyAlert();
 #endif

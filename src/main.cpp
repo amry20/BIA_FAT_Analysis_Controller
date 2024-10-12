@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <FlashStorage_STM32.h>
-#include "ADS1X15.h"
+#include<ADS1115_WE.h>
 #include <MD_AD9833.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -11,8 +11,10 @@
 #define F_SEL_2 PB_13
 #define F_SEL_3 PB_14
 #define F_SEL_4 PB_15
+#define DRDY_PIN PE8
 #define HEART_PIN PA_11
 #define ValidIDTag 0x7F
+#define FW_VERSION "1.0.0DBG"
 
 const uint32_t PIN_FSYNC = PA_4;	///< SPI Load pin number (FSYNC in AD9833 usage)
 const uint32_t DRDY_PIN = PB_8;
@@ -25,15 +27,19 @@ typedef struct EEPROM_DATA{
 
 }__attribute__((packed)) EEPROM_DATA;
 
-ADS1115 adc(I2C_ADDRESS);
+ADS1115_WE adc = ADS1115_WE(I2C_ADDRESS);
 MD_AD9833	DDS(PA7,PA5,PIN_FSYNC);  // Hardware SPI
 bool ADC_Exists = false;
 volatile bool ADCDoneConvertion = false;
-float AverageVoltage = 0.0;
-float AccumulateVoltage = 0.0;
+float AverageVoltage1 = 0.0;
+float AverageVoltage2 = 0.0;
+float AccumulateVoltage1 = 0.0;
+float AccumulateVoltage2 = 0.0;
+float ModImpedance = 0.0;
+float PointImpedance = 0.0;
 uint16_t AccumulateCount = 0;
 uint32_t SamplingInterval = 10;
-uint16_t n_sample = 10;
+uint16_t n_sample = 85;
 float DDSCustomFreq = 200000.0;
 EEPROM_DATA APP_EEPROM_DATA;
 void setup() {
@@ -43,22 +49,81 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
-  static uint32_t time_sampling = 0;
-  AverageVoltage = readChannel(0) * 2.0;
-  Serial.println(AverageVoltage,3);
+  static uint32_t sample_count = 0;
+  static bool get_adc = true;
+  static int channel_count = 0;
+  static bool wait_done = false;
+  if (channel_count == 0)
+  {
+    if (!wait_done)
+    {
+      adc.setCompareChannels(ADS1115_COMP_0_GND);
+      adc.startSingleMeasurement();
+      wait_done = true;
+    }
+    if (wait_done){
+      if (ADCDoneConvertion){
+        ADCDoneConvertion = false;
+        AccumulateVoltage1 += adc.getResult_V() * 2.055;
+        channel_count = 1;
+        wait_done = false;
+      }
+    }
+  }
+  else if (channel_count == 1){
+    if (!wait_done)
+    {
+      adc.setCompareChannels(ADS1115_COMP_1_GND);
+      adc.startSingleMeasurement();
+      wait_done = true;
+    }
+    if (wait_done){
+      if (ADCDoneConvertion){
+        ADCDoneConvertion = false;
+        AccumulateVoltage2 += adc.getResult_V() * 2.055;
+        channel_count = 0;
+        wait_done = false;
+        sample_count++;
+      }
+    }
+  }
+  
+  if (sample_count >= n_sample)
+  {
+    AverageVoltage1 = AccumulateVoltage1 / sample_count;
+    AverageVoltage2 = AccumulateVoltage2 / sample_count;
+    PointImpedance = AverageVoltage1 / (1.09585 / 2000.0); 
+    ModImpedance = AverageVoltage2 / (1.09585 / 2000.0);
+    AccumulateVoltage1 = 0;
+    AccumulateVoltage2 = 0;
+    sample_count = 0;
+    Serial.printf("D,%0.5f,%0.5f,%0.5f,%0.5f\n",AverageVoltage1,AverageVoltage2,PointImpedance,ModImpedance);
+  }
+  
   handleCommand();
   heartbeat();
 }
-
+void convReadyAlert(){
+   ADCDoneConvertion = true;
+}
 void init_app(){
   Serial.begin(115200);
   //Read EEPROM data
   Wire.begin();
-  if(adc.begin()){
-    adc.setGain(0);      //  6.144 volt
-    adc.setDataRate(7);  //  0 = slow   4 = medium   7 = fast
-    adc.setMode(0);      //  continuous mode
-    adc.readADC(0);      //  first read to trigger
+  Wire.setClock(400000);
+  if(adc.init()){
+    adc.setVoltageRange_mV(ADS1115_RANGE_6144);      //  6.144 volt
+    adc.setConvRate(ADS1115_250_SPS);
+    adc.setCompareChannels(ADS1115_COMP_0_GND); //comment line/change parameter to change channels
+    adc.setAlertPinMode(ADS1115_ASSERT_AFTER_1);
+    adc.setAlertPinToConversionReady(); //needed for this sketch
+    attachInterrupt(DRDY_PIN, convReadyAlert, FALLING);
+    adc.startSingleMeasurement();
+    while (!ADCDoneConvertion)
+    {
+      /* code */
+    }
+    ADCDoneConvertion = false;
     Serial.println("ADC Initialized Succesfully");
   }
   
@@ -73,6 +138,8 @@ void init_app(){
   DDS.begin();
   DDS.setMode(DDS.MODE_SINE);
   DDS.setPhase(DDS.CHAN_0,0);
+  DDS.setFrequency(DDS.CHAN_0,0);
+  delay(1000);
   if (!digitalReadFast(F_SEL_1) && digitalReadFast(F_SEL_2) && digitalReadFast(F_SEL_3) && digitalReadFast(F_SEL_4))
     DDS.setFrequency(DDS.CHAN_0,25000.0);
   else if (digitalReadFast(F_SEL_1) && !digitalReadFast(F_SEL_2) && digitalReadFast(F_SEL_3) && digitalReadFast(F_SEL_4))
@@ -101,13 +168,16 @@ void heartbeat(){
 }
 
 void handleCommand(){
-  String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
-
+  if (Serial.available() > 0)
+  {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd == "FIRMWARE"){
+      Serial.printf("FW,%s\n",FW_VERSION);
+    }
+  }
 }
-float readChannel(int channel) {
+float readChannel(ADS1115_MUX channel) {
   float voltage = 0.0;
-  int adc0 = adc.getValue();
-  voltage =adc.toVoltage(adc0);
   return voltage;
 }
