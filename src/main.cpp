@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <SPI.h>
 #include "main.h"
+#include <HardwareSerial.h>
 
 #define I2C_ADDRESS 0x48
 #define F_SEL_1 PB_12
@@ -29,7 +30,10 @@ typedef struct EEPROM_DATA{
 
 ADS1115_WE adc = ADS1115_WE(I2C_ADDRESS);
 MD_AD9833	DDS(PA7,PA5,PIN_FSYNC);  // Hardware SPI
+HardwareSerial SerialComm(PA3, PA2);
+
 bool ADC_Exists = false;
+bool UseCustomFreq = false;
 volatile bool ADCDoneConvertion = false;
 float AverageVoltage1 = 0.0;
 float AverageVoltage2 = 0.0;
@@ -40,7 +44,7 @@ float PointImpedance = 0.0;
 uint16_t AccumulateCount = 0;
 uint32_t SamplingInterval = 10;
 uint16_t n_sample = 85;
-float DDSCustomFreq = 200000.0;
+float DDSCustomFreq = 10000.0;
 EEPROM_DATA APP_EEPROM_DATA;
 void setup() {
   // put your setup code here, to run once:
@@ -97,7 +101,11 @@ void loop() {
     AccumulateVoltage1 = 0;
     AccumulateVoltage2 = 0;
     sample_count = 0;
-    Serial.printf("D,%0.5f,%0.5f,%0.5f,%0.5f\n",AverageVoltage1,AverageVoltage2,PointImpedance,ModImpedance);
+    char data[256];
+    memset(data,0,sizeof(data));
+    sprintf(data,"D,%0.5f,%0.5f,%0.5f,%0.5f\n",AverageVoltage1,AverageVoltage2,PointImpedance,ModImpedance);
+    Serial.write(data,strlen(data));
+    SerialComm.write(data,strlen(data));
   }
   
   handleCommand();
@@ -108,6 +116,7 @@ void convReadyAlert(){
 }
 void init_app(){
   Serial.begin(115200);
+  SerialComm.begin(115200);
   //Read EEPROM data
   Wire.begin();
   Wire.setClock(400000);
@@ -125,6 +134,7 @@ void init_app(){
     }
     ADCDoneConvertion = false;
     Serial.println("ADC Initialized Succesfully");
+    SerialComm.println("ADC Initialized Succesfully");
   }
   
   pinMode(F_SEL_1,INPUT_PULLUP);
@@ -135,6 +145,7 @@ void init_app(){
   digitalWriteFast(HEART_PIN,LOW);
   //Init DDS chip
   Serial.println("Initializing DDS...");
+  SerialComm.println("Initializing DDS...");
   DDS.begin();
   DDS.setMode(DDS.MODE_SINE);
   DDS.setPhase(DDS.CHAN_0,0);
@@ -147,12 +158,18 @@ void init_app(){
   else if (digitalReadFast(F_SEL_1) && digitalReadFast(F_SEL_2) && !digitalReadFast(F_SEL_3) && digitalReadFast(F_SEL_4))
     DDS.setFrequency(DDS.CHAN_0,100000.0);
   else if (digitalReadFast(F_SEL_1) && digitalReadFast(F_SEL_2) && digitalReadFast(F_SEL_3) && !digitalReadFast(F_SEL_4))
+  {
     DDS.setFrequency(DDS.CHAN_0,DDSCustomFreq);
+    UseCustomFreq = true;
+  }
   else DDS.setFrequency(DDS.CHAN_0,50000);
   DDS.setActiveFrequency(DDS.CHAN_0);
   Serial.print("DDS Frequency: ");
+  SerialComm.print("DDS Frequency: ");
   Serial.println(DDS.getFrequency(DDS.CHAN_0));
+  SerialComm.println(DDS.getFrequency(DDS.CHAN_0));
   Serial.println("Done.");
+  SerialComm.println("Done.");
 }
 
 void adcConvDone(){
@@ -172,8 +189,40 @@ void handleCommand(){
   {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
-    if (cmd == "FIRMWARE"){
+    if (cmd.startsWith("FIRMWARE")) {
       Serial.printf("FW,%s\n",FW_VERSION);
+    }
+    else  if (cmd.startsWith("FQ ")) {
+      String freqStr = cmd.substring(3); // Mengambil angka setelah "FQ "
+      float frequency = freqStr.toFloat(); // Mengonversi ke float
+      if (UseCustomFreq){
+        DDSCustomFreq = frequency;
+        DDS.setFrequency(DDS.CHAN_0,DDSCustomFreq);
+        Serial.printf("Successfuly to set the DDS frequency to %0.3f\n",DDS.getFrequency(DDS.CHAN_0));
+      }
+      else{
+        Serial.println("Can't set DDS the frequency, please select custom frequency on the jumper pin!");
+      }
+    }
+  }
+  if (SerialComm.available() > 0)
+  {
+    String cmd = SerialComm.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.startsWith("FIRMWARE")) {
+      SerialComm.printf("FW,%s\n",FW_VERSION);
+    }
+    else  if (cmd.startsWith("FQ ")) {
+      String freqStr = cmd.substring(3); // Mengambil angka setelah "FQ "
+      float frequency = freqStr.toFloat(); // Mengonversi ke float
+      if (UseCustomFreq){
+        DDSCustomFreq = frequency;
+        DDS.setFrequency(DDS.CHAN_0,DDSCustomFreq);
+        SerialComm.printf("Successfuly to set the DDS frequency to %0.3f\n",DDS.getFrequency(DDS.CHAN_0));
+      }
+      else{
+        SerialComm.println("Can't set the DDS frequency, please select custom frequency on the jumper pin!");
+      }
     }
   }
 }
