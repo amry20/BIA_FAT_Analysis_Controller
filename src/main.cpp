@@ -198,10 +198,10 @@ void handleCommand(){
       if (UseCustomFreq){
         DDSCustomFreq = frequency;
         DDS.setFrequency(DDS.CHAN_0,DDSCustomFreq);
-        Serial.printf("Successfuly to set the DDS frequency to %0.3f\n",DDS.getFrequency(DDS.CHAN_0));
+        Serial.printf("Successfuly to set the DDS frequency to %0.3f Hz\n",DDS.getFrequency(DDS.CHAN_0));
       }
       else{
-        Serial.println("Can't set DDS the frequency, please select custom frequency on the jumper pin!");
+        Serial.println("Can't set the DDS frequency, please select custom frequency on the jumper pin!");
       }
     }
   }
@@ -218,7 +218,7 @@ void handleCommand(){
       if (UseCustomFreq){
         DDSCustomFreq = frequency;
         DDS.setFrequency(DDS.CHAN_0,DDSCustomFreq);
-        SerialComm.printf("Successfuly to set the DDS frequency to %0.3f\n",DDS.getFrequency(DDS.CHAN_0));
+        SerialComm.printf("Successfuly to set the DDS frequency to %0.3f Hz\n",DDS.getFrequency(DDS.CHAN_0));
       }
       else{
         SerialComm.println("Can't set the DDS frequency, please select custom frequency on the jumper pin!");
